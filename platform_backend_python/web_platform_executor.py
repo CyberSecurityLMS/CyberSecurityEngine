@@ -6,20 +6,23 @@ import time
 
 app = Flask(__name__)
 
-# Initialize Docker client
+# Initialize the Docker client
 docker_client = docker.from_env()
 
 # Container settings
-CONTAINER_IMAGE = "python:3.9-slim"  # Base image for running the code
+CONTAINER_IMAGE = "python:3.9-slim" # Base image for running the code
 RESOURCE_LIMITS = {
-    "cpu_quota": 50000,  # Limit CPU usage
-    "mem_limit": "256m",  # Limit memory usage
+    "cpu_quota": 50000,             # Limit CPU usage
+    "mem_limit": "256m",            # Limit memory usage
 }
 TIMEOUT_SECONDS = 10
 
 # Session management
 sessions = {}
 
+# Execute code in a Docker container
+# This endpoint receives a code archive, runs it in a container, and returns a session ID
+# The session ID can be used to check the status of the execution or retrieve logs
 @app.route("/execute", methods=["POST"])
 def execute_code():
     # Receive the code archive
@@ -35,7 +38,7 @@ def execute_code():
     code_file.save(file_path)
 
     try:
-        # Create container
+        # Create the container
         container = docker_client.containers.run(
             CONTAINER_IMAGE,
             command=["python", "-m", "http.server"],
@@ -52,7 +55,7 @@ def execute_code():
             **RESOURCE_LIMITS,
         )
 
-        # Store session info
+        # Store the session info
         sessions[session_id] = {
             "container": container,
             "start_time": time.time(),
@@ -62,6 +65,8 @@ def execute_code():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Check the result of the execution
+# This endpoint retrieves the logs of the container if it has finished executing
 @app.route("/result/<session_id>", methods=["GET"])
 def get_result(session_id):
     session = sessions.get(session_id)
@@ -75,6 +80,9 @@ def get_result(session_id):
     else:
         return jsonify({"status": "still running"}), 202
 
+# Clean up the session
+# This endpoint stops and removes the container associated with the session ID
+# It also removes the session from the session management dictionary
 @app.route("/cleanup/<session_id>", methods=["POST"])
 def cleanup_session(session_id):
     session = sessions.pop(session_id, None)
@@ -90,6 +98,7 @@ def cleanup_session(session_id):
         return jsonify({"error": str(e)}), 500
 
 # Background task to clean up timed-out containers
+# This function runs in a separate thread and checks for expired sessions
 def cleanup_expired_sessions():
     while True:
         for session_id, session in list(sessions.items()):
