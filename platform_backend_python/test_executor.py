@@ -4,6 +4,7 @@ import time
 import pytest
 import threading
 from unittest.mock import patch, MagicMock
+from platform_backend_python import web_platform_executor as executor
 from platform_backend_python.web_platform_executor import app, sessions, docker_client, TIMEOUT_SECONDS
 
 # This is a test suite for the web platform executor API.
@@ -142,4 +143,49 @@ def test_cleanup_expired_session():
     assert session_id not in sessions
     mock_container.stop.assert_called_once()
     mock_container.remove.assert_called_once()
+
+
+def test_prewarmed_container_used(client):
+    mock_container = MagicMock()
+    mock_container.id = "mocked_id"
+    executor.prewarmed_pool.clear()
+    executor.prewarmed_pool.append(mock_container)
+
+    mock_exec_result = MagicMock()
+    mock_exec_result.exit_code = 0
+    mock_exec_result.output = b""
+
+    with patch.object(executor.docker_client.api, 'put_archive') as mock_put_archive, \
+         patch.object(mock_container, 'exec_run', return_value=mock_exec_result):
+        
+        data = {
+            'file': (io.BytesIO(b"print('Hello')"), 'main.py')
+        }
+        response = client.post("/execute", data=data, content_type='multipart/form-data')
+        
+        assert response.status_code == 200
+        assert len(executor.prewarmed_pool) == 0  # container was popped
+        mock_put_archive.assert_called_once()
+        mock_container.exec_run.assert_called_once()
+
+
+def test_create_prewarmed_container_adds_to_pool():
+    executor.prewarmed_pool.clear()
+    mock_container = MagicMock()
+
+    executor.docker_client = MagicMock()
+    executor.docker_client.containers.run.return_value = mock_container
+    executor.create_prewarmed_container()
+    assert len(executor.prewarmed_pool) == 1
+    assert executor.prewarmed_pool[0] is mock_container
+
+
+
+def test_initialize_prewarmed_pool_fills_pool():
+    executor.prewarmed_pool.clear()
+    mock_container = MagicMock()
+
+    with patch.object(executor.docker_client.containers, 'run', return_value=mock_container):
+        executor.initialize_prewarmed_pool()
+        assert len(executor.prewarmed_pool) == executor.PREWARMED_POOL_SIZE
 
