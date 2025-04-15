@@ -3,8 +3,10 @@ import docker
 import os
 import uuid
 import time
+from flasgger import Swagger
 
 app = Flask(__name__)
+swagger = Swagger(app)
 
 # Initialize the Docker client
 docker_client = docker.from_env()
@@ -26,6 +28,32 @@ sessions = {}
 @app.route("/execute", methods=["POST"])
 def execute_code():
     # Receive the code archive
+
+    """
+    Upload and execute code inside an isolated Docker container
+    ---
+    consumes:
+      - multipart/form-data
+    parameters:
+      - name: file
+        in: formData
+        type: file
+        required: true
+        description: Code archive file (e.g. main.py or zip)
+    responses:
+      200:
+        description: Code executed successfully
+        schema:
+          type: object
+          properties:
+            session_id:
+              type: string
+      400:
+        description: No file provided
+      500:
+        description: Container error
+    """
+
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -69,6 +97,24 @@ def execute_code():
 # This endpoint retrieves the logs of the container if it has finished executing
 @app.route("/result/<session_id>", methods=["GET"])
 def get_result(session_id):
+
+    """
+    Get the execution result/logs of a session
+    ---
+    parameters:
+      - name: session_id
+        in: path
+        type: string
+        required: true
+    responses:
+      200:
+        description: Execution logs returned
+      202:
+        description: Still running
+      404:
+        description: Session not found
+    """
+
     session = sessions.get(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
@@ -85,6 +131,24 @@ def get_result(session_id):
 # It also removes the session from the session management dictionary
 @app.route("/cleanup/<session_id>", methods=["POST"])
 def cleanup_session(session_id):
+
+    """
+    Stop and remove a container session by ID
+    ---
+    parameters:
+      - name: session_id
+        in: path
+        type: string
+        required: true
+    responses:
+      200:
+        description: Session cleaned up
+      404:
+        description: Session not found
+      500:
+        description: Cleanup error
+    """
+
     session = sessions.pop(session_id, None)
     if not session:
         return jsonify({"error": "Session not found"}), 404

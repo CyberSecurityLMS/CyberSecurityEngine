@@ -6,7 +6,6 @@ import threading
 from unittest.mock import patch, MagicMock
 from platform_backend_python.web_platform_executor import app, sessions, docker_client, TIMEOUT_SECONDS
 
-
 # This is a test suite for the web platform executor API.
 # It uses pytest and unittest.mock to test the Flask application endpoints.
 @pytest.fixture
