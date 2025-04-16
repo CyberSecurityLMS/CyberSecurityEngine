@@ -4,8 +4,8 @@ import time
 import pytest
 import threading
 from unittest.mock import patch, MagicMock
-from platform_backend_python import web_platform_executor as executor
-from platform_backend_python.web_platform_executor import app, sessions, docker_client, TIMEOUT_SECONDS
+import platform_backend_python.app.development_env.web_platform_executor as executor
+from platform_backend_python.app.development_env.web_platform_executor import app, sessions, docker_client, TIMEOUT_SECONDS
 
 # This is a test suite for the web platform executor API.
 # It uses pytest and unittest.mock to test the Flask application endpoints.
@@ -21,7 +21,7 @@ def test_execute_code_success(client):
     mock_container.status = "exited"
     mock_container.logs.return_value = b"Hello from container"
 
-    with patch("platform_backend_python.web_platform_executor.docker_client.containers.run", return_value=mock_container):
+    with patch("platform_backend_python.app.development_env.web_platform_executor.docker_client.containers.run", return_value=mock_container):
         data = {
             'file': (io.BytesIO(b"print('Hello')"), 'main.py')
         }
@@ -35,7 +35,7 @@ def test_execute_code_failure(client):
     mock_docker_client = MagicMock()
     mock_docker_client.containers.run.side_effect = Exception("Container error")
 
-    with patch("platform_backend_python.web_platform_executor.docker_client", mock_docker_client):
+    with patch("platform_backend_python.app.development_env.web_platform_executor.docker_client", mock_docker_client):
         data = {
             'file': (io.BytesIO(b"print('Hello')"), 'main.py')
         }
@@ -178,7 +178,6 @@ def test_create_prewarmed_container_adds_to_pool():
     executor.create_prewarmed_container()
     assert len(executor.prewarmed_pool) == 1
     assert executor.prewarmed_pool[0] is mock_container
-
 
 
 def test_initialize_prewarmed_pool_fills_pool():
