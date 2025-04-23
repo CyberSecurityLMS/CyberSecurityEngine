@@ -14,7 +14,7 @@ def run_flask():
 def run_pytest():
     time.sleep(2)
     try:
-        subprocess.run(["pytest", "./platform_backend_python/app/development_env/test_executor.py"])
+        subprocess.run(["pytest", "./platform_backend_python/app/tests/test_executor.py"])
     except KeyboardInterrupt:
         print("[Pytest] Тесты остановлены.")
 

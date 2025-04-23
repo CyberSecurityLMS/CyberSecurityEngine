@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y gcc && \
     pip install --no-cache-dir flask flasgger docker
 
 WORKDIR /app
-COPY web_platform_executor.py .
+COPY web_platform_executor.py swagger.yml ./
 
 CMD ["python", "web_platform_executor.py"]
 

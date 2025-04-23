@@ -13,7 +13,7 @@ from flasgger import Swagger
 from threading import Thread
 
 app = Flask(__name__)
-swagger = Swagger(app)
+swagger = Swagger(app, template_file="swagger.yml")
 
 # Initialize the Docker client
 docker_client = docker.from_env()
@@ -45,10 +45,9 @@ def create_prewarmed_container():
             **RESOURCE_LIMITS,
         )
         prewarmed_pool.append(container)
-        print("[Prewarm] Container created and added to the prewarmed pool")
+        print("[Prewarm] Container created")
     except Exception as e:
-        print(f"[Prewarm] Error while creating the container: {e}")
-
+        print(f"[Prewarm] Failed to create container: {e}")
 
 def initialize_prewarmed_pool():
     while len(prewarmed_pool) < PREWARMED_POOL_SIZE:
@@ -70,47 +69,6 @@ def _make_tar(file_path):
 @app.route("/execute", methods=["POST"])
 def execute_code():
     # Receive the code archive
-
-    """
-    Upload and execute code inside an isolated Docker container.
-    ---
-    tags:
-      - Code Execution
-    consumes:
-      - multipart/form-data
-    parameters:
-      - name: file
-        in: formData
-        type: file
-        required: true
-        description: Python script to run (e.g. main.py)
-    responses:
-      200:
-        description: Code executed successfully
-        schema:
-          type: object
-          properties:
-            session_id:
-              type: string
-              description: Unique ID of the created execution session
-      400:
-        description: No file was provided
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "No file provided"
-      500:
-        description: Docker or execution error
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Internal server error"
-    """
-
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -161,52 +119,6 @@ def execute_code():
 # This endpoint retrieves the logs of the container if it has finished executing
 @app.route("/result/<session_id>", methods=["GET"])
 def get_result(session_id):
-
-    """
-    Get execution result/logs by session ID.
-    ---
-    tags:
-      - Code Execution
-    parameters:
-      - name: session_id
-        in: path
-        type: string
-        required: true
-        description: Session ID returned from the /execute endpoint
-    responses:
-      200:
-        description: Execution finished, logs returned
-        schema:
-          type: object
-          properties:
-            logs:
-              type: string
-              description: Output logs from the script execution
-      202:
-        description: Execution is still running
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: "still running"
-      404:
-        description: Session not found
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Session not found"
-      500:
-        description: Error while retrieving logs
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-    """
-
     session = sessions.get(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
@@ -229,44 +141,6 @@ def get_result(session_id):
 # It also removes the session from the session management dictionary
 @app.route("/cleanup/<session_id>", methods=["POST"])
 def cleanup_session(session_id):
-
-    """
-    Stop and remove a running container session by ID.
-    ---
-    tags:
-      - Code Execution
-    parameters:
-      - name: session_id
-        in: path
-        type: string
-        required: true
-        description: ID of the session to be cleaned up
-    responses:
-      200:
-        description: Session stopped and removed successfully
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: "cleaned up"
-      404:
-        description: Session not found
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Session not found"
-      500:
-        description: Cleanup error
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-    """
-
     session = sessions.pop(session_id, None)
     if not session:
         return jsonify({"error": "Session not found"}), 404
