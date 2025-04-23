@@ -49,6 +49,7 @@ def create_prewarmed_container():
     except Exception as e:
         print(f"[Prewarm] Error while creating the container: {e}")
 
+
 def initialize_prewarmed_pool():
     while len(prewarmed_pool) < PREWARMED_POOL_SIZE:
         create_prewarmed_container()
