@@ -1,2 +1,14 @@
 .dockerignore
 Dockerfile
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+.env
+*.tar
+*.zip
+*.log
+tmp/
