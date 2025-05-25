@@ -22,7 +22,7 @@ docker_client = docker.from_env()
 sessions = {}
 
 # Container settings
-CONTAINER_IMAGE = "python:3.9-slim" # Base image for running the code
+CONTAINER_IMAGE = "python:3.13-slim" # Base image for running the code
 RESOURCE_LIMITS = {
     "cpu_quota": 50000,             # Limit CPU usage
     "cpu_period": 100000,           # Limit CPU usage
