@@ -11,6 +11,19 @@ import io
 from flask import Flask, request, jsonify
 from flasgger import Swagger
 from threading import Thread
+from py_eureka_client import eureka_client
+
+EUREKA_URL = os.environ.get("EUREKA_URL", "http://discovery-server:8761/eureka")
+APP_NAME = os.environ.get("APP_NAME", "executor-svc")
+
+eureka_client.init(
+    eureka_server=EUREKA_URL,
+    app_name=APP_NAME,
+    instance_port=5000
+)
+print(f"Registered in Eureka as {APP_NAME}")
+
+
 
 app = Flask(__name__)
 swagger = Swagger(app, template_file="swagger.yml")
@@ -189,6 +202,6 @@ signal.signal(signal.SIGINT, shutdown_cleanup)
 
 
 if __name__ == "__main__":
-    initialize_prewarmed_pool()
+    # initialize_prewarmed_pool()
     Thread(target=cleanup_expired_sessions, daemon=True).start()
     app.run(host="0.0.0.0", port=5000)
