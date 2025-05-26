@@ -1,0 +1,36 @@
+name: CD Deploy Executor
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: check-paths
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push executor
+        uses: docker/build-push-action@v4
+        with:
+          context: ./platform_backend_python/app/development_env-svc
+          file: ./platform_backend_python/app/development_env-svc/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/code-executor:latest
