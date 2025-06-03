@@ -1,149 +1,171 @@
 import io
 import uuid
 import time
-import pytest
+import subprocess
 import threading
-from unittest.mock import patch, MagicMock
-import platform_backend_python.app.development_env.web_platform_executor as executor
-from platform_backend_python.app.development_env.web_platform_executor import app, sessions, docker_client, TIMEOUT_SECONDS
+import os
+import signal
+import shutil
+import tempfile
+import docker
+import atexit
+import tarfile
+from flask import Flask, request, jsonify
+from flasgger import Swagger
+from threading import Thread
+from py_eureka_client import eureka_client
 
-# This is a test suite for the web platform executor API.
-# It uses pytest and unittest.mock to test the Flask application endpoints.
+import pytest
+from unittest.mock import patch, MagicMock
+from platform_backend_python.app.development_env import web_platform_executor as executor
+from platform_backend_python.app.development_env.web_platform_executor import (
+    app, sessions, docker_client, TIMEOUT_SECONDS
+)
+
 @pytest.fixture
 def client():
     with app.test_client() as client:
         yield client
 
+# === EXECUTE ===
 
-# Test the /execute endpoint for a successful code execution
 def test_execute_code_success(client):
-    mock_container = MagicMock()
-    mock_container.status = "exited"
-    mock_container.logs.return_value = b"Hello from container"
+    mock_container = MagicMock(status="exited")
+    mock_container.logs.return_value = b"Execution done."
 
-    with patch("platform_backend_python.app.development_env.web_platform_executor.docker_client.containers.run", return_value=mock_container):
-        data = {
-            'file': (io.BytesIO(b"print('Hello')"), 'main.py')
-        }
+    with patch.object(docker_client.containers, 'run', return_value=mock_container):
+        data = {'file': (io.BytesIO(b"print('Hello')"), 'main.py')}
         response = client.post("/execute", data=data, content_type='multipart/form-data')
         assert response.status_code == 200
         assert "session_id" in response.get_json()
 
-
-# Test the /execute endpoint for a failed code execution
 def test_execute_code_failure(client):
     mock_docker_client = MagicMock()
     mock_docker_client.containers.run.side_effect = Exception("Container error")
 
     with patch("platform_backend_python.app.development_env.web_platform_executor.docker_client", mock_docker_client):
-        data = {
-            'file': (io.BytesIO(b"print('Hello')"), 'main.py')
-        }
+        data = {'file': (io.BytesIO(b"print('Hello')"), 'main.py')}
         response = client.post("/execute", data=data, content_type='multipart/form-data')
-
         assert response.status_code == 500
         assert "error" in response.get_json()
         assert response.get_json()["error"] == "Container error"
 
-
-# Test the /execute endpoint for a missing file
 def test_execute_code_no_file(client):
     response = client.post("/execute", data={}, content_type='multipart/form-data')
     assert response.status_code == 400
     assert response.get_json()["error"] == "No file provided"
 
+def test_execute_invalid_file_name(client):
+    data = {'file': (io.BytesIO(b"print('bad')"), 'malicious.sh')}
+    response = client.post("/execute", data=data, content_type='multipart/form-data')
+    assert response.status_code == 400
+    assert "must be a .py file" in response.get_json()["error"]
 
-# Test the /get endpoint for a successful session retrieval
-def test_get_result_success(client):
-    fake_session_id = str(uuid.uuid4())
+def test_execute_empty_file_name(client):
+    data = {'file': (io.BytesIO(b"print()"), '')}
+    response = client.post("/execute", data=data, content_type='multipart/form-data')
+    assert response.status_code == 400
+    assert "No file provided" in response.get_json()["error"]
+
+def test_execute_put_archive_failure(client):
     mock_container = MagicMock()
-    mock_container.status = "exited"
+    executor.prewarmed_pool.clear()
+    executor.prewarmed_pool.append(mock_container)
+
+    with patch.object(executor.docker_client.api, 'put_archive', side_effect=Exception("Archive fail")), \
+         patch.object(mock_container, 'exec_run') as mock_exec_run:
+        data = {'file': (io.BytesIO(b"print('fail')"), 'main.py')}
+        response = client.post("/execute", data=data, content_type='multipart/form-data')
+        assert response.status_code == 500
+        assert "Archive fail" in response.get_json()["error"]
+        mock_exec_run.assert_not_called()
+
+def test_execute_exec_run_failure(client):
+    mock_container = MagicMock()
+    executor.prewarmed_pool.clear()
+    executor.prewarmed_pool.append(mock_container)
+
+    with patch.object(executor.docker_client.api, 'put_archive'), \
+         patch.object(mock_container, 'exec_run', side_effect=Exception("exec error")):
+        data = {'file': (io.BytesIO(b"print('fail')"), 'main.py')}
+        response = client.post("/execute", data=data, content_type='multipart/form-data')
+        assert response.status_code == 500
+        assert "exec error" in response.get_json()["error"]
+
+# === RESULT ===
+
+def test_get_result_success(client):
+    sid = str(uuid.uuid4())
+    mock_container = MagicMock(status="exited")
     mock_container.logs.return_value = b"Execution logs"
 
-    sessions[fake_session_id] = {
-        "container": mock_container,
-        "start_time": 0,
-    }
-
-    response = client.get(f"/result/{fake_session_id}")
+    sessions[sid] = {"container": mock_container, "start_time": time.time()}
+    response = client.get(f"/result/{sid}")
     assert response.status_code == 200
     assert "logs" in response.get_json()
 
-
-# Test the /get endpoint for a session that does not exist
 def test_get_result_not_found(client):
     response = client.get("/result/nonexistent")
     assert response.status_code == 404
     assert response.get_json()["error"] == "Session not found"
 
-
-# Test the /get endpoint for a session that is still running
 def test_get_result_still_running(client):
-    fake_session_id = str(uuid.uuid4())
-    mock_container = MagicMock()
-    mock_container.status = "running"
+    sid = str(uuid.uuid4())
+    mock_container = MagicMock(status="running")
 
-    sessions[fake_session_id] = {
-        "container": mock_container,
-        "start_time": 0,
-    }
-
-    response = client.get(f"/result/{fake_session_id}")
+    sessions[sid] = {"container": mock_container, "start_time": time.time()}
+    response = client.get(f"/result/{sid}")
     assert response.status_code == 202
     assert response.get_json()["status"] == "still running"
 
+def test_get_result_exec_error(client):
+    sid = str(uuid.uuid4())
+    mock_container = MagicMock(status="exited")
+    mock_container.logs.side_effect = Exception("log fail")
+    sessions[sid] = {"container": mock_container, "start_time": time.time()}
 
-# Test the /cleanup endpoint for a successful session cleanup
+    response = client.get(f"/result/{sid}")
+    assert response.status_code == 500
+    assert "log fail" in response.get_json()["error"]
+
+# === CLEANUP ===
+
 def test_cleanup_session_success(client):
-    fake_session_id = str(uuid.uuid4())
+    sid = str(uuid.uuid4())
     mock_container = MagicMock()
+    sessions[sid] = {"container": mock_container, "start_time": time.time()}
 
-    sessions[fake_session_id] = {
-        "container": mock_container,
-        "start_time": 0,
-    }
-
-    response = client.post(f"/cleanup/{fake_session_id}")
+    response = client.post(f"/cleanup/{sid}")
     assert response.status_code == 200
     assert response.get_json()["status"] == "cleaned up"
 
-
-# Test the /cleanup endpoint for a session not found
 def test_cleanup_session_not_found(client):
     response = client.post("/cleanup/nonexistent")
     assert response.status_code == 404
     assert response.get_json()["error"] == "Session not found"
 
-
-# Test the /cleanup endpoint for a session that has already been cleaned up
 def test_cleanup_expired_session():
+    sid = "expired_session"
     mock_container = MagicMock()
     mock_container.stop = MagicMock()
     mock_container.remove = MagicMock()
 
-    session_id = "expired_session"
-    sessions[session_id] = {
-        "container": mock_container,
-        "start_time": time.time() - 15 # Simulate an expired session
-    }
-
-    def one_time_cleanup():
-        for session_id_inner, session in list(sessions.items()):
-            if time.time() - session["start_time"] > TIMEOUT_SECONDS:
-                container = session["container"]
+    sessions[sid] = {"container": mock_container, "start_time": time.time() - 15}
+    with patch("platform_backend_python.app.development_env.web_platform_executor.TIMEOUT_SECONDS", 10):
+        for k, s in list(sessions.items()):
+            if time.time() - s["start_time"] > TIMEOUT_SECONDS:
                 try:
-                    container.stop()
-                    container.remove()
+                    s["container"].stop()
+                    s["container"].remove()
                 except Exception:
                     pass
-                sessions.pop(session_id_inner, None)
+                sessions.pop(k, None)
 
-    one_time_cleanup()
-
-    assert session_id not in sessions
+    assert sid not in sessions
     mock_container.stop.assert_called_once()
     mock_container.remove.assert_called_once()
 
+# === PREWARMING ===
 
 def test_prewarmed_container_used(client):
     mock_container = MagicMock()
@@ -151,40 +173,36 @@ def test_prewarmed_container_used(client):
     executor.prewarmed_pool.clear()
     executor.prewarmed_pool.append(mock_container)
 
-    mock_exec_result = MagicMock()
-    mock_exec_result.exit_code = 0
-    mock_exec_result.output = b""
+    mock_exec_result = MagicMock(exit_code=0, output=b"")
 
     with patch.object(executor.docker_client.api, 'put_archive') as mock_put_archive, \
          patch.object(mock_container, 'exec_run', return_value=mock_exec_result):
-        
-        data = {
-            'file': (io.BytesIO(b"print('Hello')"), 'main.py')
-        }
+        data = {'file': (io.BytesIO(b"print('Hello')"), 'main.py')}
         response = client.post("/execute", data=data, content_type='multipart/form-data')
-        
+
         assert response.status_code == 200
-        assert len(executor.prewarmed_pool) == 0  # container was popped
+        assert len(executor.prewarmed_pool) == 0
         mock_put_archive.assert_called_once()
         mock_container.exec_run.assert_called_once()
-
 
 def test_create_prewarmed_container_adds_to_pool():
     executor.prewarmed_pool.clear()
     mock_container = MagicMock()
-
-    executor.docker_client = MagicMock()
-    executor.docker_client.containers.run.return_value = mock_container
-    executor.create_prewarmed_container()
-    assert len(executor.prewarmed_pool) == 1
-    assert executor.prewarmed_pool[0] is mock_container
-
+    with patch.object(docker_client.containers, 'run', return_value=mock_container):
+        executor.create_prewarmed_container()
+        assert len(executor.prewarmed_pool) == 1
+        assert executor.prewarmed_pool[0] is mock_container
 
 def test_initialize_prewarmed_pool_fills_pool():
     executor.prewarmed_pool.clear()
     mock_container = MagicMock()
-
-    with patch.object(executor.docker_client.containers, 'run', return_value=mock_container):
+    with patch.object(docker_client.containers, 'run', return_value=mock_container):
         executor.initialize_prewarmed_pool()
         assert len(executor.prewarmed_pool) == executor.PREWARMED_POOL_SIZE
 
+def test_prevent_overfill_pool():
+    executor.prewarmed_pool.clear()
+    executor.prewarmed_pool.extend([MagicMock()] * executor.PREWARMED_POOL_SIZE)
+    with patch.object(docker_client.containers, 'run') as mock_run:
+        executor.initialize_prewarmed_pool()
+        mock_run.assert_not_called()
